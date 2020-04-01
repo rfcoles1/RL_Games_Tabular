@@ -9,38 +9,41 @@ HeatCap_Ice = 2.108 #kJ/kg/C
 HeatCap_Water = 4.148 #kJ/kg/C
 HeatCap_Steam = 1.996 #kJ/kg/C
 
-class WaterEnvTab(object):
+class WaterEnvTab(gym.Env):
     def __init__(self):
         self.action_space = gym.spaces.Discrete(3)
         
         self.RoomTemp = 21 #degC
         self.gen_critPoints()
 
-        minT = -50
-        maxT = 150
-        minE = self.get_Energy(minT)
-        maxE = self.get_Energy(maxT)
-        statesize = 100
-         
-        self.Energies = np.linspace(minE,maxE,statesize)
+        self.minT = -50 #degC
+        self.maxT = 150 #degC
+        self.minE = self.get_Energy(self.minT) #kJ
+        self.maxE = self.get_Energy(self.maxT) #kJ
+        
+        self.statesize = 100
+        
+        #state table
+        self.Energies = np.linspace(self.minE, self.maxE, self.statesize)
     
-        self.TargetTemp = 100
-        self.TargetMass = np.array([0,.5,.5])
-
-        self.incr = 10
+        self.TargetTemp = 100. #degC
+        self.TargetMass = np.array([0,.5,.5]) #Sum to 1
 
         self.reset()
                 
     def reset(self):
-        self.stateID = 16
-
+        self.stateID = np.argmin(abs(self.Energies))
         self.done = False
         return self.get_state()
 
     def get_state(self):
         E = self.Energies[self.stateID]
         T,M = self.get_true_value(E)
-        return np.array([T, self.encodeMass(M)])
+        print(T,M) 
+        T_norm = (T - self.minT)/(self.maxT - self.minT)
+        M_norm = self.encodeMass(M)/2.0
+
+        return np.array([T_norm, M_norm])
 
 
     def encodeMass(self, m):
@@ -61,26 +64,36 @@ class WaterEnvTab(object):
             massfrac[mInd] = 1
         return massfrac
 
-    
+    # 0 - move back
+    # 1 - stay
+    # 2 - move forward
     def step(self, action):
-        self.add_energy(action)
+        #self.stateID += int(action-1)
+        if action == 0 and self.stateID > 0:
+            self.stateID -= 1
+        if action == 2 and self.stateID < len(self.Energies)-1:
+            self.stateID += 1
+        
         next_state = self.get_state()
         reward = self.get_reward()
         return next_state, reward, self.done, {}
 
-    def add_energy(self, action):
-        energy = (action-1)*10
-        self.EnergyIn += energy
-        self.update_state()
-
     def get_reward(self):
         state = self.get_state()
+       
+        TargetT = (self.TargetTemp - self.minT)/(self.maxT - self.minT)
+        T_reward = -abs(TargetT - state[0])
         
-        T_reward = abs(self.TargetTemp - state[0])
-        M_reward = abs(self.encodeMass(self.TargetMass) - state[1])
+        TargetM = self.encodeMass(self.TargetMass)/2.0 
+        M_reward = -abs(TargetM - state[1])
         return T_reward + M_reward
 
-    def get_Energy(self, T): #wont be necessarily correct for Boiling/Melting temperature
+
+
+
+
+    def get_Energy(self, T): 
+    #return energy for specific T, wont be necessarily correct for Boiling/Melting temperature
         if T < MeltingPoint:
             E = self.Lower_Melting_Energy + -(abs(T-MeltingPoint)*HeatCap_Ice)
         elif T < BoilingPoint:
@@ -89,7 +102,8 @@ class WaterEnvTab(object):
             E = self.Upper_Boiling_Energy + (abs(T-BoilingPoint)*HeatCap_Steam)
         return E 
 
-    def get_true_value(self, E): #gives true values for temperature and mass fraction, given an energy value
+    def get_true_value(self, E): 
+    #gives true values for temperature and mass fraction, given an energy value
         if E > self.Upper_Boiling_Energy:
             T = BoilingPoint + (1./HeatCap_Steam)*(E-self.Upper_Boiling_Energy)
             MassFractions = [0,0,1]
@@ -114,6 +128,7 @@ class WaterEnvTab(object):
             return T, MassFractions 
 
     def gen_critPoints(self):    
+    #given a refernece temp, returns the amount of total energy for a phase transition 
         self.Upper_Melting_Energy = (MeltingPoint - self.RoomTemp) * HeatCap_Water
         self.Lower_Melting_Energy = self.Upper_Melting_Energy - LatentHeat_Fusion
 
